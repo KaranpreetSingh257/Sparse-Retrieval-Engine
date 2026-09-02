@@ -1,12 +1,15 @@
 ﻿import sys
+import socket
 
-# Pre-download required NLTK resources during container build (per TA announcement)
+# Set socket timeout to 10s to prevent network hanging during docker build
+socket.setdefaulttimeout(10.0)
+
 try:
     import nltk
-    nltk.download('punkt', quiet=True)
-    nltk.download('stopwords', quiet=True)
-    nltk.download('punkt_tab', quiet=True)
-except Exception:
+    nltk.download('punkt', quiet=True, raise_on_error=False)
+    nltk.download('stopwords', quiet=True, raise_on_error=False)
+    nltk.download('punkt_tab', quiet=True, raise_on_error=False)
+except BaseException:
     pass
 
 try:
@@ -17,5 +20,5 @@ try:
         py_modules=[],
         packages=[],
     )
-except Exception:
+except BaseException:
     pass

@@ -1,5 +1,5 @@
 ﻿"""
-submission/indexer.py — build your inverted index here.
+submission/indexer.py — Turbo-Fast Inverted Indexer for COL 7364/764 Assignment 1.
 """
 import gzip
 import os
@@ -10,10 +10,12 @@ from typing import Dict, List, Tuple
 try:
     from nltk.stem import PorterStemmer
     _STEMMER = PorterStemmer()
+    _STEM_FN = _STEMMER.stem
 except ImportError:
     _STEMMER = None
+    _STEM_FN = None
 
-_TOKEN_RE = re.compile(r"[a-z0-9]+")
+_TOKEN_RE_FIND = re.compile(r"[a-z0-9]+").findall
 _STEM_CACHE: Dict[str, str] = {}
 
 
@@ -21,15 +23,16 @@ def tokenize(text: str) -> List[str]:
     """Lowercase, alphanumeric tokenization with memoized Porter stemming."""
     if not text:
         return []
-    raw_tokens = _TOKEN_RE.findall(text.lower())
-    if _STEMMER is None:
+    raw_tokens = _TOKEN_RE_FIND(text.lower())
+    if _STEM_FN is None:
         return raw_tokens
 
+    stem_cache_get = _STEM_CACHE.get
     stemmed = []
     for token in raw_tokens:
-        st = _STEM_CACHE.get(token)
+        st = stem_cache_get(token)
         if st is None:
-            st = _STEMMER.stem(token)
+            st = _STEM_FN(token)
             _STEM_CACHE[token] = st
         stemmed.append(st)
     return stemmed
@@ -50,22 +53,27 @@ class InvertedIndex:
         """Tokenize each document, construct postings lists, and compute statistics."""
         self.N = len(corpus)
         total_tokens = 0
+        postings = self.postings
+        doc_len = self.doc_len
 
         for doc_id, text in corpus:
             tokens = tokenize(text)
             length = len(tokens)
-            self.doc_len[doc_id] = length
+            doc_len[doc_id] = length
             total_tokens += length
 
-            term_counts: Dict[str, int] = {}
-            for idx, token in enumerate(tokens):
-                weight = 3 if idx < 25 else 1
-                term_counts[token] = term_counts.get(token, 0) + weight
+            tf: Dict[str, int] = {}
+            # Title 3x weighting for first 25 tokens
+            for t in tokens[:25]:
+                tf[t] = tf.get(t, 0) + 3
+            for t in tokens[25:]:
+                tf[t] = tf.get(t, 0) + 1
 
-            for term, count in term_counts.items():
-                if term not in self.postings:
-                    self.postings[term] = {}
-                self.postings[term][doc_id] = count
+            for t, count in tf.items():
+                if t not in postings:
+                    postings[t] = {doc_id: count}
+                else:
+                    postings[t][doc_id] = count
 
         self.avg_doc_len = (total_tokens / self.N) if self.N > 0 else 0.0
 
@@ -88,13 +96,22 @@ class InvertedIndex:
 
     @classmethod
     def load(cls, index_dir: str) -> "InvertedIndex":
-        """Reconstruct InvertedIndex purely from disk."""
-        index = cls()
+        """Reconstruct the inverted index from index_dir."""
         file_path = os.path.join(index_dir, "index.pkl.gz")
-        with gzip.open(file_path, "rb") as f:
-            state = pickle.load(f)
-        index.postings = state["postings"]
-        index.doc_len = state["doc_len"]
-        index.N = state["N"]
-        index.avg_doc_len = state["avg_doc_len"]
-        return index
+        if not os.path.exists(file_path):
+            legacy_path = os.path.join(index_dir, "index.pkl")
+            if os.path.exists(legacy_path):
+                with open(legacy_path, "rb") as f:
+                    state = pickle.load(f)
+            else:
+                raise FileNotFoundError(f"No index file found in {index_dir}")
+        else:
+            with gzip.open(file_path, "rb") as f:
+                state = pickle.load(f)
+
+        idx = cls()
+        idx.postings = state["postings"]
+        idx.doc_len = state["doc_len"]
+        idx.N = state["N"]
+        idx.avg_doc_len = state["avg_doc_len"]
+        return idx
