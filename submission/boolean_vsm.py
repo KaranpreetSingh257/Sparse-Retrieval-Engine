@@ -27,33 +27,118 @@ Two independent pieces to implement:
 Both pieces should read from the same InvertedIndex you build in
 indexer.py.
 """
-from typing import List, Tuple
+import math
+from typing import Dict, List, Optional, Set, Tuple
 
-from submission.indexer import InvertedIndex
+from submission.indexer import InvertedIndex, tokenize
+
+_INDEX: Optional[InvertedIndex] = None
+_DOC_NORMS: Dict[str, float] = {}
+_IDF_CACHE: Dict[str, float] = {}
+
+
+def _ensure_doc_norms() -> None:
+    """Lazily compute document vector norms if VSM scoring is called."""
+    global _DOC_NORMS
+    if _DOC_NORMS or not _INDEX or _INDEX.N == 0:
+        return
+    doc_sq_sums: Dict[str, float] = {}
+    for term, post in _INDEX.postings.items():
+        idf = _IDF_CACHE.get(term, 0.0)
+        for doc_id, tf in post.items():
+            weight = tf * idf
+            doc_sq_sums[doc_id] = doc_sq_sums.get(doc_id, 0.0) + (weight * weight)
+    for doc_id, sq_sum in doc_sq_sums.items():
+        _DOC_NORMS[doc_id] = math.sqrt(sq_sum)
 
 
 def build(index: InvertedIndex) -> None:
-    """Optional: precompute anything VSM-specific (e.g. document vector
-    norms) from the InvertedIndex built in indexer.py.
+    """Precompute IDF cache for VSM."""
+    global _INDEX, _DOC_NORMS, _IDF_CACHE
+    _INDEX = index
+    _DOC_NORMS = {}
+    _IDF_CACHE = {}
 
-    Call this from retrieve.load_index(), not retrieve.build_index() —
-    the harness runs those two in separate processes, so any cache this
-    creates only needs to exist in the process that also calls
-    retrieve(). If you want a precomputed cache to persist across the
-    build/load boundary too, write it out via InvertedIndex.save() instead
-    (it then counts toward your index-size score) and rebuild the cache
-    here from the loaded index."""
-    raise NotImplementedError
+    if not _INDEX or _INDEX.N == 0:
+        return
+
+    for term, post in _INDEX.postings.items():
+        df = len(post)
+        if df > 0:
+            _IDF_CACHE[term] = math.log(_INDEX.N / df)
 
 
 def boolean_search(query: str, mode: str = "and") -> List[str]:
-    """Return the (unranked) list of doc_ids matching `query`, treating it
-    as a conjunction (`mode="and"`) or disjunction (`mode="or"`) of its
-    terms."""
-    raise NotImplementedError
+    """Return matching doc_ids for conjunctive ('and') or disjunctive ('or') query."""
+    if not _INDEX:
+        return []
+
+    tokens = tokenize(query)
+    if not tokens:
+        return []
+
+    doc_sets: List[Set[str]] = [
+        set(_INDEX.postings.get(t, {}).keys()) for t in tokens
+    ]
+
+    mode_lower = mode.strip().lower()
+    if mode_lower == "and":
+        matching = set.intersection(*doc_sets) if doc_sets else set()
+    elif mode_lower == "or":
+        matching = set.union(*doc_sets) if doc_sets else set()
+    else:
+        raise ValueError(f"Unknown boolean search mode: {mode}")
+
+    return sorted(list(matching))
 
 
-def vsm_score(query: str, k: int) -> List[Tuple[str, float]]:
-    """Return up to k (doc_id, score) pairs for `query`, ranked by
-    TF-IDF cosine similarity, highest score first."""
-    raise NotImplementedError
+def vsm_score(query: str, k: int = 10) -> List[Tuple[str, float]]:
+    """Return top-k (doc_id, score) pairs ranked by TF-IDF cosine similarity."""
+    if not _INDEX or _INDEX.N == 0:
+        return []
+
+    _ensure_doc_norms()
+
+    tokens = tokenize(query)
+    if not tokens:
+        return []
+
+    # Count query term frequencies
+    query_tf: Dict[str, int] = {}
+    for token in tokens:
+        query_tf[token] = query_tf.get(token, 0) + 1
+
+    # Compute query vector weights and query norm
+    query_weights: Dict[str, float] = {}
+    q_sq_sum = 0.0
+    for term, tf in query_tf.items():
+        idf = _IDF_CACHE.get(term, 0.0)
+        if idf > 0:
+            weight = tf * idf
+            query_weights[term] = weight
+            q_sq_sum += weight * weight
+
+    if q_sq_sum == 0.0:
+        return []
+
+    q_norm = math.sqrt(q_sq_sum)
+
+    # Accumulate dot products across matching postings
+    doc_dots: Dict[str, float] = {}
+    for term, q_w in query_weights.items():
+        post = _INDEX.postings.get(term, {})
+        idf = _IDF_CACHE.get(term, 0.0)
+        for doc_id, tf in post.items():
+            d_w = tf * idf
+            doc_dots[doc_id] = doc_dots.get(doc_id, 0.0) + (q_w * d_w)
+
+    # Calculate cosine similarity
+    scored_docs: List[Tuple[str, float]] = []
+    for doc_id, dot in doc_dots.items():
+        d_norm = _DOC_NORMS.get(doc_id, 0.0)
+        if d_norm > 0:
+            cos_sim = dot / (q_norm * d_norm)
+            scored_docs.append((doc_id, float(cos_sim)))
+
+    scored_docs.sort(key=lambda x: x[1], reverse=True)
+    return scored_docs[:k]
