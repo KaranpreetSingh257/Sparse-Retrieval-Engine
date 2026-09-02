@@ -1,6 +1,7 @@
 ﻿"""
-submission/indexer.py — Turbo-Fast Inverted Indexer for COL 7364/764 Assignment 1.
+submission/indexer.py — High-Efficiency Inverted Index for COL 7364/764 Assignment 1.
 """
+import array
 import gzip
 import os
 import pickle
@@ -63,7 +64,7 @@ class InvertedIndex:
             total_tokens += length
 
             tf: Dict[str, int] = {}
-            # Title 3x weighting for first 25 tokens
+            # Title 3x weighting for first 25 tokens, 1x for body
             for t in tokens[:25]:
                 tf[t] = tf.get(t, 0) + 3
             for t in tokens[25:]:
@@ -82,7 +83,7 @@ class InvertedIndex:
         return len(self.postings.get(term, {}))
 
     def save(self, index_dir: str) -> None:
-        """Persist postings and statistics to disk using gzip-compressed pickle."""
+        """Persist postings and statistics to disk using compact gzip-compressed pickle."""
         os.makedirs(index_dir, exist_ok=True)
         file_path = os.path.join(index_dir, "index.pkl.gz")
         state = {
@@ -91,7 +92,7 @@ class InvertedIndex:
             "N": self.N,
             "avg_doc_len": self.avg_doc_len,
         }
-        with gzip.open(file_path, "wb") as f:
+        with gzip.open(file_path, "wb", compresslevel=6) as f:
             pickle.dump(state, f, protocol=pickle.HIGHEST_PROTOCOL)
 
     @classmethod
