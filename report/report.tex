@@ -1,34 +1,37 @@
-﻿\documentclass[10pt,a4paper]{article}
+﻿\documentclass[9pt,a4paper]{article}
 \usepackage[utf8]{inputenc}
-\usepackage[margin=0.75in]{geometry}
+\usepackage[margin=0.6in]{geometry}
 \usepackage{amsmath,amssymb}
 \usepackage{booktabs}
 \usepackage{graphicx}
 \usepackage{hyperref}
 \usepackage{microtype}
-\usepackage{xcolor}
+\usepackage{tabularx}
+\usepackage{float}
+\usepackage{enumitem}
 
-\definecolor{primary}{RGB}{26,35,126}
-\definecolor{secondary}{RGB}{13,71,161}
+\setlist{nosep, leftmargin=12pt}
+\hypersetup{colorlinks=true, linkcolor=blue, urlcolor=blue, citecolor=blue}
 
-\title{\vspace{-0.5cm}\textbf{\LARGE COL 7364: Assignment 1 Final Report}\\\textbf{\Large Sparse Retrieval Arena: Inverted Indexing, Vector Space Models, and Clinical BM25F Tuning on TREC-COVID}}
+\title{\vspace{-1.4cm}\textbf{\Large COL 7364: Assignment 1 Final Report}\\\textbf{\large Sparse Retrieval Arena: Inverted Indexing, Vector Space Models, and Clinical BM25F Tuning on TREC-COVID}}
 \author{\textbf{Student:} Karanpreet Singh \quad \textbf{Entry Number:} 2026MCS2250 \\ \textbf{Course:} COL 7364 / 764: Information Retrieval \quad \textbf{Instructor:} Prof. Sayan Ranu \\ \textbf{Institution:} Indian Institute of Technology Delhi}
 \date{September 06, 2026}
 
 \begin{document}
 \maketitle
-\vspace{-0.3cm}
+\vspace{-0.7cm}
 
 \begin{abstract}
 \noindent This academic report presents the comprehensive architectural design, algorithmic implementation, empirical benchmarking, and competitive hyperparameter optimization of an end-to-end sparse Information Retrieval (IR) system evaluated on the full TREC-COVID collection (171,332 biomedical research papers). Per the course specification, we document performance across both the Initial Submission Phase and the 5-Day Competition Leaderboard Phase. We implement, benchmark, and contrast three foundational retrieval paradigms: Boolean Retrieval (AND/OR), the Vector Space Model (TF-IDF Cosine Similarity), and Robertson-Sp\"arck Jones BM25. To overcome biomedical terminology barriers, our final system implements a Clinical BM25F scorer with 50-topic thesaurus expansion, Title field boosting ($4.2\times$), power-law IDF weighting, and multi-term coverage. On the development collection, our model achieves an \textbf{nDCG@10 of 0.6745}, \textbf{Precision@10 of 0.7580}, and \textbf{MRR of 0.8980}, while compressing the full 171k inverted index to just \textbf{19.6 MB} on disk with sub-20ms latency in an isolated offline Docker container.
 \end{abstract}
+\vspace{-0.3cm}
 
 \section{Indexing Design Choices and Storage Architecture}
 Text preprocessing and posting-list indexing form the core computational foundation of sparse retrieval. For a collection of 171,332 biomedical papers, naive in-memory representations or uncompressed disk dumps fail to satisfy the strict evaluation rubric (Section 7), which penalizes high disk footprints and slow build times. We designed an optimized three-tier indexing pipeline in \texttt{submission/indexer.py}:
 
 \subsection{Tokenization and Morphological Normalization}
 \begin{itemize}
-    \item \textbf{Case-Folding and Alphanumeric Extraction:} Raw document text is lowercased and segmented using the compiled regular expression \texttt{[a-z0-9]+}. This cleanly strips punctuation, HTML, and \LaTeX{} formatting noise while strictly preserving critical clinical alphanumeric identifiers (e.g., \textit{covid}, \textit{19}, \textit{sars}, \textit{cov}, \textit{2}, \textit{bnt162b2}, \textit{d614g}).
+    \item \textbf{Case-Folding and Alphanumeric Extraction:} Raw document text is lowercased and segmented using compiled regex \texttt{[a-z0-9]+}. This strips punctuation and \LaTeX{} formatting noise while strictly preserving critical clinical alphanumeric identifiers (e.g., \textit{covid}, \textit{19}, \textit{sars}, \textit{cov}, \textit{2}, \textit{bnt162b2}, \textit{d614g}).
     \item \textbf{Memoized Porter Stemming:} In medical search, matching morphological variants is essential (e.g., matching a query containing \textit{"infecting"} to a paper containing \textit{"infections"} or \textit{"infected"}). We utilize NLTK's \texttt{PorterStemmer}. Because algorithmic suffix stripping across 30+ million corpus tokens creates a massive CPU bottleneck, we introduced an in-memory memoization cache (\texttt{\_STEM\_CACHE: Dict[str, str]}). For a distinct vocabulary of $\approx 100,000$ unique terms, memoized stem lookups operate in $O(1)$ time, reducing indexing duration by over $3.5\times$.
     \item \textbf{Question Stopword Pruning:} Information requests in TREC-COVID are structured as conversational questions (e.g., \textit{"what is the impact of..."}). Common framing words such as \textit{"what"}, \textit{"how"}, \textit{"is"}, \textit{"causes"}, \textit{"evidence"}, and \textit{"available"} carry high document frequencies but near-zero discriminative value. We curate a targeted dictionary of 60+ question stopwords to strip conversational overhead prior to postings list traversal.
 \end{itemize}
@@ -42,7 +45,7 @@ The course harness evaluates index persistence by enforcing a hard process bound
 \subsection{Phase 1 (Initial Submission Phase) Performance}
 In Phase 1 (August 28 deadline), the objective was clearing the instructors' undisclosed BM25 baseline. Our baseline Robertson BM25 achieved an \textbf{nDCG@10 of 0.5665}, safely clearing the baseline floor (\texttt{beat it: True}) and passing all 17 automated interface and metric conformance tests in CI.
 
-\newpage
+\clearpage
 
 \section{Classical Retrieval Models and Comparative Evaluation}
 As mandated by Section 4 and Section 8 of the assignment specification, we implemented, evaluated, and independently verified three foundational information retrieval models against the 50 development topics and 66,336 qrels.
@@ -64,20 +67,18 @@ To ensure that \texttt{load\_index()} remains fast and lightweight, document Euc
 \subsection{Robertson-Sp\"arck Jones BM25 Model}
 The probabilistic BM25 retriever (\texttt{submission/bm25.py}) resolves the two fundamental shortcomings of classical TF-IDF: linear term frequency growth and document length bias. The scoring function is defined as:
 \begin{equation}
-\text{score}(D, Q) = \sum_{t \in Q} \text{IDF}(t) \cdot \frac{\text{tf}(t, D) \cdot (k_1 + 1)}{\text{tf}(t, D) + k_1 \cdot \left(1 - b + b \cdot \frac{|D|}{\text{avgdl}}\right)}
-\end{equation}
-where the Robertson-Sp\"arck Jones smoothed IDF formulation is calculated as:
-\begin{equation}
-\text{IDF}(t) = \ln\left(\frac{N - \text{df}(t) + 0.5}{\text{df}(t) + 0.5} + 1.0\right)
+\text{score}(D, Q) = \sum_{t \in Q} \text{IDF}(t) \cdot \frac{\text{tf}(t, D) \cdot (k_1 + 1)}{\text{tf}(t, D) + k_1 \cdot \left(1 - b + b \cdot \frac{|D|}{\text{avgdl}}\right)}, \quad \text{where } \text{IDF}(t) = \ln\left(\frac{N - \text{df}(t) + 0.5}{\text{df}(t) + 0.5} + 1.0\right)
 \end{equation}
 
 \subsection{Empirical Comparing Table: Boolean/VSM vs BM25 vs Clinical Models}
 The comprehensive table below directly compares the required models on the 171,332 document corpus across all graded metrics:
 
-\begin{table}[htbp]
+\begin{table}[H]
 \centering
 \small
 \caption{Empirical Comparison on Full TREC-COVID Collection (171,332 Documents, 50 Dev Queries)}
+\vspace{-0.1cm}
+\resizebox{\linewidth}{!}{%
 \begin{tabular}{lcccccc}
 \toprule
 \textbf{Retrieval Model / Paradigm} & \textbf{nDCG@10} & \textbf{MAP@10} & \textbf{Precision@10} & \textbf{MRR} & \textbf{Mean Latency} & \textbf{Index Size} \\
@@ -90,21 +91,25 @@ Tuned BM25 ($k_1=1.5, b=0.50$) & 0.6012 & 0.0144 & 0.6820 & 0.8630 & 1.35 s & 35
 Clinical BM25F + Title Weight (4.2x) & 0.6420 & 0.0162 & 0.7240 & 0.8810 & 38 ms & \textbf{19.6 MB} \\
 \textbf{Clinical BM25F + Thesaurus (Final Model)} & \textbf{0.6745} & \textbf{0.0178} & \textbf{0.7580} & \textbf{0.8980} & \textbf{$<$ 20 ms} & \textbf{19.6 MB} \\
 \bottomrule
-\end{tabular}
+\end{tabular}%
+}
 \end{table}
+\vspace{-0.2cm}
 
 \noindent \textbf{Key Comparative Observations:} (1) Boolean AND produces high precision on frequent terms but suffers catastrophic zero-recall on multi-term medical queries; (2) VSM improves recall via continuous weighting but lacks term saturation, allowing verbose background sections to artificially inflate scores; (3) BM25 fundamentally outperforms VSM (+0.098 nDCG@10) through non-linear saturation; (4) Our Clinical BM25F achieves the highest overall accuracy (+0.108 over BM25) by bridging vocabulary mismatch and boosting title matches.
 
-\newpage
+\clearpage
 
 \section{Hyperparameter Tuning and Empirical Sensitivity Analysis}
 To systematically tune BM25 for medical literature, we executed a 2D parameter grid sweep across $k_1 \in [0.8, 2.2]$ (step 0.1) and $b \in [0.30, 0.85]$ (step 0.05) on the 50 development topics. Figure 1 illustrates the resulting empirical response surface.
 
-\begin{figure}[htbp]
+\begin{figure}[H]
 \centering
-\includegraphics[width=0.88\linewidth]{param_sweep.png}
+\includegraphics[width=0.78\linewidth,height=4.6cm,keepaspectratio]{param_sweep.png}
+\vspace{-0.2cm}
 \caption{Two-dimensional hyperparameter sensitivity surface showing the interaction of term saturation ($k_1$) and length normalization ($b$) on nDCG@10 across the 171k TREC-COVID collection.}
 \end{figure}
+\vspace{-0.3cm}
 
 \subsection{Empirical Findings \& Parameter Dynamics}
 \begin{itemize}
@@ -134,15 +139,17 @@ To characterize the intrinsic failure modes of lexical sparse retrieval, we cond
     \end{itemize}
 \end{enumerate}
 
-\newpage
+\clearpage
 
 \section{Phase 2 Competition Round Trajectory and Final Architecture}
 During the 5-day competition phase (August 29 -- September 3, 2026), the public leaderboard reported held-out evaluations scored at 5:00 PM daily. The table below traces our iterative engineering trajectory across each competition day:
 
-\begin{table}[htbp]
+\begin{table}[H]
 \centering
 \small
 \caption{Phase 2 Competition Round Leaderboard Trajectory (Held-out Test Collection)}
+\vspace{-0.1cm}
+\resizebox{\linewidth}{!}{%
 \begin{tabular}{lcccccc}
 \toprule
 \textbf{Competition Iteration} & \textbf{Held-out nDCG} & \textbf{Held-out MAP} & \textbf{Efficiency Mod.} & \textbf{Index Size} & \textbf{devScore} & \textbf{Leaderboard Rank} \\
@@ -154,8 +161,10 @@ Day 4: Fixed Conformance Run & 0.2223 & 0.1236 & -0.1000 (Slow) & 35.0 MB & 0.60
 Day 5 (Snapshot): Class Growth & 0.2223 & 0.1236 & -0.0805 & 35.3 MB & 0.6139 & Rank 17 / 55 \\
 \textbf{Day 5 Final: Fully Optimized Engine} & \textbf{0.2223 -- 0.2260} & \textbf{0.1236 -- 0.1255} & \textbf{+0.0650 (Fast)} & \textbf{19.6 MB} & \textbf{0.8200 -- 0.8500} & \textbf{Top 6 -- 8 Tier} \\
 \bottomrule
-\end{tabular}
+\end{tabular}%
+}
 \end{table}
+\vspace{-0.2cm}
 
 \subsection{Description of Final Competition Entry}
 Our final submitted retrieval engine (\texttt{submission/retrieve.py} backed by \texttt{submission/custom\_scorer.py}) combines: (1) Tuned BM25F ($k_1=1.45, b=0.38$, Title 4.2x); (2) 50-topic clinical thesaurus expansion (0.50 discount factor); (3) Power-law IDF ($IDF^{1.35}$); and (4) Sharp multi-term coverage boost ($(1.0 + 0.65 \times \text{cov}^{1.8})$). In addition, we resolved all containerization challenges: configuring \texttt{py\_modules=[]} in \texttt{setup.py} (eliminating setuptools flat-layout auto-discovery crashes), pre-downloading offline NLTK resources, and enforcing clean single-wrapper archive packaging (\texttt{2026MCS2250.zip}). All 17 unit tests pass in 4.55s, and query latency is sub-20ms.
